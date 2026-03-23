@@ -13,6 +13,7 @@ or directly:
 import threading
 import tkinter as tk
 import json
+import time
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -25,7 +26,7 @@ from hfpac_format import (
 )
 from lpc import DEFAULT_LPC_ORDER, FRAME_SIZE
 
-ENCODER_VERSION = "6.1.2.0"
+ENCODER_VERSION = "6.1.3.0"
 
 
 class EncoderGUI:
@@ -773,6 +774,17 @@ class EncoderGUI:
         self._result_frame.pack_forget()
         self._status_var.set("Encoding…")
         self._progress["value"] = 0
+        self._encode_start_time = time.time()
+        self._last_gui_update = 0
+
+        # Try to get sample rate and frame size for speed calculation
+        try:
+            import wave
+            with wave.open(kwargs['input_wav'], 'rb') as w:
+                self._src_sr = w.getframerate()
+        except Exception:
+            self._src_sr = 44100 # fallback
+        self._enc_frame_size = kwargs.get('frame_size', 1024)
 
         threading.Thread(
             target=self._encode_worker,
@@ -783,6 +795,33 @@ class EncoderGUI:
     def _update_progress(self, current, total):
         pct = (current / total) * 100 if total > 0 else 0
         self._progress["value"] = pct
+        
+        now = time.time()
+        # Update text roughly every 0.3 seconds to avoid UI flicker
+        if now - getattr(self, '_last_gui_update', 0) > 0.3 and current > 0 and total > 0:
+            self._last_gui_update = now
+            elapsed = now - getattr(self, '_encode_start_time', now)
+            
+            if elapsed > 0.5: # Wait half a second before estimating to avoid wildly wrong early numbers
+                # Calculate time remaining
+                rem_frames = total - current
+                frames_per_sec = current / elapsed
+                eta_secs = int(rem_frames / frames_per_sec) if frames_per_sec > 0 else 0
+                
+                # Format ETA string
+                mins, secs = divmod(eta_secs, 60)
+                eta_str = f"ETA: {mins}m {secs:02d}s" if mins > 0 else f"ETA: {secs}s"
+                
+                # Calculate encoding speed relative to realtime playback
+                # Processed seconds of audio = current * frame_size / sample_rate
+                sr = getattr(self, '_src_sr', 44100)
+                frame_sz = getattr(self, '_enc_frame_size', 1024)
+                audio_dur_processed = (current * frame_sz) / sr
+                speed_mult = audio_dur_processed / elapsed if elapsed > 0 else 0.0
+                
+                self._status_var.set(f"Encoding… {pct:.1f}%  |  Speed: {speed_mult:.1f}x  |  {eta_str}")
+            else:
+                self._status_var.set(f"Encoding… {pct:.1f}%")
 
     def _encode_worker(self, kwargs):
         import hfpac_format as hfmt
