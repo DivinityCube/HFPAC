@@ -12,7 +12,7 @@ from player import HFPACPlayer
 from hfpac_format import display_version
 
 # Player version — first two numbers track the HFPAC format version
-PLAYER_VERSION = "6.2.0.1"
+PLAYER_VERSION = "6.2.0.2"
 # Versions of the HFPAC format this player can read
 COMPATIBLE_VERSIONS = "v2, v3, v4, v4.5, v5, v5.1, v6, v6.1, v6.2"
 COPYRIGHT = "© 2026 HFPAC Project"
