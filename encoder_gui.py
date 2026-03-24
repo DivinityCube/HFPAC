@@ -26,8 +26,7 @@ from hfpac_format import (
 )
 from lpc import DEFAULT_LPC_ORDER, FRAME_SIZE
 
-ENCODER_VERSION = "6.1.3.0"
-
+ENCODER_VERSION = "6.1.4.0"
 
 class EncoderGUI:
     def __init__(self, root: tk.Tk):
@@ -657,6 +656,64 @@ class EncoderGUI:
         # Auto-fill output path if it's empty
         if not self._out_var.get():
             self._out_var.set(str(Path(path).with_suffix(".hfpac")))
+            
+        self._extract_metadata(path)
+
+    def _extract_metadata(self, path):
+        try:
+            with open(path, 'rb') as f:
+                header = f.read(12)
+                if header[:4] != b'RIFF' or header[8:12] != b'WAVE':
+                    return
+                
+                # Default empty fields
+                title = artist = album = track = year = ""
+                
+                while True:
+                    chunk_header = f.read(8)
+                    if not chunk_header or len(chunk_header) < 8:
+                        break
+                    
+                    chunk_id = chunk_header[:4]
+                    chunk_size = int.from_bytes(chunk_header[4:8], byteorder='little')
+                    
+                    if chunk_id == b'LIST':
+                        list_type = f.read(4)
+                        if list_type == b'INFO':
+                            bytes_read = 4
+                            while bytes_read < chunk_size:
+                                info_id = f.read(4)
+                                info_size = int.from_bytes(f.read(4), byteorder='little')
+                                
+                                # Info chunks are padded to even bytes
+                                padded_size = info_size + (info_size % 2)
+                                info_data = f.read(padded_size)[:info_size]
+                                
+                                bytes_read += 8 + padded_size
+                                
+                                try:
+                                    text = info_data.decode('utf-8', 'ignore').strip('\x00')
+                                    if info_id == b'INAM': title = text
+                                    elif info_id == b'IART': artist = text
+                                    elif info_id == b'IPRD': album = text
+                                    elif info_id == b'ITRK': track = text
+                                    elif info_id == b'ICRD': year = text
+                                except Exception:
+                                    pass
+                        else:
+                            f.seek(chunk_size - 4, 1) # Skip the rest of this LIST
+                    else:
+                        f.seek(chunk_size, 1) # Skip other chunks
+                        
+                # Update GUI variables if metadata found
+                if title and not self._title_var.get(): self._title_var.set(title)
+                if artist and not self._artist_var.get(): self._artist_var.set(artist)
+                if album and not self._album_var.get(): self._album_var.set(album)
+                if track and not self._track_var.get(): self._track_var.set(track)
+                if year and not self._year_var.get(): self._year_var.set(year)
+                
+        except Exception:
+            pass # Silently fail metadata extraction if the file is locked/invalid
 
     def _browse_out(self):
         initial = self._out_var.get() or self._src_var.get()
