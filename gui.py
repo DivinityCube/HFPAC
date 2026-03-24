@@ -12,7 +12,7 @@ from player import HFPACPlayer
 from hfpac_format import display_version
 
 # Player version — first two numbers track the HFPAC format version
-PLAYER_VERSION = "6.2.0.0"
+PLAYER_VERSION = "6.2.0.1"
 # Versions of the HFPAC format this player can read
 COMPATIBLE_VERSIONS = "v2, v3, v4, v4.5, v5, v5.1, v6, v6.1, v6.2"
 COPYRIGHT = "© 2026 HFPAC Project"
@@ -189,10 +189,12 @@ class HFPACGUI:
         if hasattr(self, 'log_frame'):
             if self.pref_advanced_logging.get():
                 self.log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-                self.root.geometry("450x820")
+                # Expand window when logging is shown
+                self.root.geometry("450x860")
             else:
                 self.log_frame.pack_forget()
-                self.root.geometry("450x640")
+                # Restore base window size
+                self.root.geometry("450x660")
 
     def _on_advanced_logging_changed(self):
         self.save_settings()
@@ -336,10 +338,14 @@ class HFPACGUI:
         self.info_label.pack(side=tk.LEFT, anchor="nw")
 
         # Album Art Label
-        self.art_label = tk.Label(info_content_frame, width=120, height=120)  # Reserve space
+        self.art_label = tk.Label(info_content_frame)  # Will resize when image is loaded
         self.art_label.pack(side=tk.RIGHT, anchor="ne", padx=(10, 0))
         self.current_art_image = None # Hold reference to prevent garbage collection
-        
+
+        # Controls Frame
+        ctrl_frame = tk.Frame(self.root)
+        ctrl_frame.pack(pady=10)
+
         self.btn_play = tk.Button(ctrl_frame, text="Play", width=8, command=self.play_audio, state=tk.DISABLED)
         self.btn_play.pack(side=tk.LEFT, padx=5)
         
