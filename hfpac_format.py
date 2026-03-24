@@ -56,7 +56,7 @@ from huffman import HuffmanNode, serialise_tree, deserialise_tree
 # ---------------------------------------------------------------------------
 
 MAGIC             = b"HFPAC"
-FORMAT_VERSION    = 9        # v6.1 (displayed as "v6.1", stored as 9)
+FORMAT_VERSION    = 10       # v6.2 (displayed as "v6.2", stored as 10)
 MIN_VERSION       = 2
 HEADER_SIZE       = 27       # fixed header bytes (v5/v8) - larger for v9
 
@@ -91,6 +91,7 @@ _VERSION_DISPLAY = {
     7: "v5.1",
     8: "v6",
     9: "v6.1",
+    10: "v6.2",
 }
 
 
@@ -120,10 +121,12 @@ class Metadata:
     album:        str = ""
     track_number: int = 0    # 0 = unknown
     year:         int = 0    # 0 = unknown
+    pcm_md5:      str = ""   # checksum of raw PCM (v6.2+)
+    cover_art:    bytes = b""# binary image data (v6.2+)
 
     def is_empty(self) -> bool:
         return not any([self.title, self.artist, self.album,
-                        self.track_number, self.year])
+                        self.track_number, self.year, self.pcm_md5, self.cover_art])
 
 @dataclass
 class HFPACHeader:
@@ -238,11 +241,16 @@ def _write_metadata_block(f: BinaryIO, meta: Metadata) -> None:
     t  = _str(meta.title)
     ar = _str(meta.artist)
     al = _str(meta.album)
+    md5 = _str(meta.pcm_md5)
 
     body = struct.pack(">H", len(t))  + t  + \
            struct.pack(">H", len(ar)) + ar + \
            struct.pack(">H", len(al)) + al + \
            struct.pack(">HH", meta.track_number, meta.year)
+           
+    # Extension for v6.2 (version 10+)
+    body += struct.pack(">H", len(md5)) + md5
+    body += struct.pack(">I", len(meta.cover_art)) + meta.cover_art
 
     crc  = _crc32(body)
     block = body + struct.pack(">I", crc)
@@ -276,9 +284,25 @@ def _read_metadata_block(f: BinaryIO) -> Metadata:
     artist = _read_str()
     album  = _read_str()
     track_number, year = struct.unpack_from(">HH", body, pos)
+    pos += 4
 
+    pcm_md5 = ""
+    cover_art = b""
+    
+    # Read v6.2+ extensions if available
+    if pos < len(body):
+        try:
+            pcm_md5 = _read_str()
+            if pos < len(body):
+                (art_len,) = struct.unpack_from(">I", body, pos)
+                pos += 4
+                cover_art = body[pos:pos+art_len]
+        except struct.error:
+            pass # ignore malformed trailing data
+            
     return Metadata(title=title, artist=artist, album=album,
-                    track_number=track_number, year=year)
+                    track_number=track_number, year=year,
+                    pcm_md5=pcm_md5, cover_art=cover_art)
 
 
 # ---------------------------------------------------------------------------
@@ -611,13 +635,21 @@ def read_header(f: BinaryIO) -> HFPACHeader:
                            entropy_mode=em, lpc_mode=lm,
                            sync_interval=si, encoder_delay=delay, trailing_padding=pad,
                            version=8, seek_table=seek_table, metadata=metadata)
+                           
+    if version == 9:
+        # v9 (v6.1)
+        return HFPACHeader(sr, ch, bd, lpc, fs * FRAME_SIZE_DIVISOR, ns, nf,
+                           frames_per_block=fpb, stereo_mode=sm,
+                           entropy_mode=em, lpc_mode=lm,
+                           sync_interval=si, encoder_delay=delay, trailing_padding=pad,
+                           version=9, seek_table=seek_table, metadata=metadata)
 
-    # v9 (v6.1)
+    # v10 (v6.2)
     return HFPACHeader(sr, ch, bd, lpc, fs * FRAME_SIZE_DIVISOR, ns, nf,
                        frames_per_block=fpb, stereo_mode=sm,
                        entropy_mode=em, lpc_mode=lm,
                        sync_interval=si, encoder_delay=delay, trailing_padding=pad,
-                       version=9, seek_table=seek_table, metadata=metadata)
+                       version=10, seek_table=seek_table, metadata=metadata)
 
 
 # ---------------------------------------------------------------------------

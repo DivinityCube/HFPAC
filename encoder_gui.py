@@ -26,7 +26,7 @@ from hfpac_format import (
 )
 from lpc import DEFAULT_LPC_ORDER, FRAME_SIZE
 
-ENCODER_VERSION = "6.1.5.0"
+ENCODER_VERSION = "6.2.0.0"
 
 class EncoderGUI:
     def __init__(self, root: tk.Tk):
@@ -236,6 +236,14 @@ class EncoderGUI:
         self._year_var = tk.StringVar()
         tk.Entry(num_row, textvariable=self._year_var, width=6).pack(side=tk.LEFT)
 
+        # Cover Art row
+        art_row = tk.Frame(meta_frame)
+        art_row.grid(row=4, column=0, columnspan=2, sticky="ew", padx=6, pady=2)
+        tk.Label(art_row, text="Cover Art", anchor="w", width=12).pack(side=tk.LEFT)
+        self._art_path_var = tk.StringVar()
+        tk.Entry(art_row, textvariable=self._art_path_var, width=22, state="readonly").pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(art_row, text="Browse…", command=self._browse_art).pack(side=tk.LEFT)
+
         # ── Encoding options ──────────────────────────────────────────
         opt_frame = tk.LabelFrame(self.root, text="Encoding Options")
         opt_frame.pack(fill=tk.X, **pad)
@@ -280,16 +288,16 @@ class EncoderGUI:
 
         tk.Label(row_ver, text="Format version", anchor="w",
                  width=14).pack(side=tk.LEFT)
-        self._version_var = tk.StringVar(value="Latest (v6.1)")
+        self._version_var = tk.StringVar(value="Latest (v6.2)")
         self._version_cb  = ttk.Combobox(
             row_ver, textvariable=self._version_var,
-            values=["Latest (v6.1)", "v6", "v5.1", "v5", "v4.5", "v4", "v3", "v2"],
+            values=["Latest (v6.2)", "v6.1", "v6", "v5.1", "v5", "v4.5", "v4", "v3", "v2"],
             state="readonly", width=14,
         )
         self._version_cb.pack(side=tk.LEFT)
         _info_btn(row_ver, "Format version",
             "Selects which version of the HFPAC format to write.\n\n"
-            "Latest (v6.1) uses all current features: true gapless playback metadata, "
+            "Latest (v6.2) uses all current features: true gapless playback metadata, "
             "adaptive LPC order per frame, silence detection, history carry-over "
             "between frames, integer LPC, Rice coding, mid-side stereo, seek table, "
             "and metadata.\n\n"
@@ -544,7 +552,7 @@ class EncoderGUI:
                         "Mid-Side",    "Integer", "Rice",    False, False),
         "v6":          (["Mid-Side", "Independent"],  ["Integer", "Float32"], ["Rice", "Huffman"],
                         "Mid-Side",    "Integer", "Rice",    True,  True),
-        "Latest (v6.1)": (["Mid-Side", "Independent"],  ["Integer", "Float32"], ["Rice", "Huffman"],
+        "Latest (v6.2)": (["Mid-Side", "Independent"],  ["Integer", "Float32"], ["Rice", "Huffman"],
                         "Mid-Side",    "Integer", "Rice",    True,  True),
     }
 
@@ -565,7 +573,7 @@ class EncoderGUI:
         self._applying_preset = True
         try:
             # Lock format to Latest if applying a modern preset
-            self._version_var.set("Latest (v6.1)")
+            self._version_var.set("Latest (v6.2)")
             self._on_version_change()
             
             # Defaults for High/Ultra
@@ -600,7 +608,7 @@ class EncoderGUI:
 
     def _on_version_change(self):
         ver = self._version_var.get()
-        if ver != "Latest (v6.1)":
+        if ver != "Latest (v6.2)":
             self._preset_var.set("Custom")
             self._preset_cb.config(state="disabled")
         else:
@@ -715,6 +723,14 @@ class EncoderGUI:
         except Exception:
             pass # Silently fail metadata extraction if the file is locked/invalid
 
+    def _browse_art(self):
+        path = filedialog.askopenfilename(
+            title="Select Cover Art",
+            filetypes=[("Image files", "*.jpg;*.jpeg;*.png")],
+        )
+        if path:
+            self._art_path_var.set(path)
+
     def _browse_out(self):
         initial = self._out_var.get() or self._src_var.get()
         path = filedialog.asksaveasfilename(
@@ -739,7 +755,8 @@ class EncoderGUI:
         "v5":            6,
         "v5.1":          7,
         "v6":            8,
-        "Latest (v6.1)": 9,
+        "v6.1":          9,
+        "Latest (v6.2)": 10,
     }
 
     def _collect_options(self):
@@ -792,12 +809,18 @@ class EncoderGUI:
 
         # Metadata only meaningful for v5.1+ (target_ver ≥ 7)
         if target_ver >= 7:
+            cover_bytes = b""
+            if self._art_path_var.get() and Path(self._art_path_var.get()).exists():
+                with open(self._art_path_var.get(), "rb") as f:
+                    cover_bytes = f.read()
+
             meta = Metadata(
                 title        = self._title_var.get().strip(),
                 artist       = self._artist_var.get().strip(),
                 album        = self._album_var.get().strip(),
                 track_number = _int(self._track_var.get()),
                 year         = _int(self._year_var.get()),
+                cover_art    = cover_bytes,
             )
         else:
             meta = Metadata()

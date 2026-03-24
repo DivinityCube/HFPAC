@@ -17,6 +17,7 @@ Dependencies:
 """
 
 import time
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple
@@ -382,6 +383,14 @@ def encode_wav(
     entropy_name = "Rice" if entropy_mode == ENTROPY_RICE else "Huffman"
     lpc_name     = "Integer" if lpc_mode == FMT_LPC_INTEGER else "Float32"
 
+    if metadata is None:
+        from hfpac_format import Metadata
+        metadata = Metadata()
+        
+    # Calculate Bit-Perfect Validation Hash (MD5) for v6.2+
+    pcm_bytes = raw_samples.tobytes()
+    metadata.pcm_md5 = hashlib.md5(pcm_bytes).hexdigest()
+
     print(f"  Sample rate:  {sr} Hz")
     print(f"  Bit depth:    {bit_depth}-bit")
     print(f"  Channels:     {num_channels}")
@@ -515,6 +524,17 @@ def decode_hfpac(input_hfpac: str, output_wav: str) -> dict:
                 channel_pcm[0], channel_pcm[1])
 
     final = channel_pcm[0] if header.channels == 1 else np.stack(channel_pcm, axis=1)
+
+    # Perform Bit-Perfect Validation (if MD5 is present)
+    if hasattr(header, 'metadata') and header.metadata and getattr(header.metadata, 'pcm_md5', None):
+        print("  Verifying Bit-Perfect Audio Integrity...")
+        decoded_bytes = final.tobytes()
+        computed_md5 = hashlib.md5(decoded_bytes).hexdigest()
+        if computed_md5 == header.metadata.pcm_md5:
+            print("  ✅ Bit-Perfect Validation: PASS")
+        else:
+            print(f"  ❌ Bit-Perfect Validation: FAIL (Expected {header.metadata.pcm_md5}, got {computed_md5})")
+            
     _write_wav(output_wav, final, header.sample_rate, header.bit_depth)
 
     elapsed = time.perf_counter() - t_start

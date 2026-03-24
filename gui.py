@@ -12,9 +12,9 @@ from player import HFPACPlayer
 from hfpac_format import display_version
 
 # Player version — first two numbers track the HFPAC format version
-PLAYER_VERSION = "6.1.5.0"
+PLAYER_VERSION = "6.2.0.0"
 # Versions of the HFPAC format this player can read
-COMPATIBLE_VERSIONS = "v2, v3, v4, v4.5, v5, v5.1, v6, v6.1"
+COMPATIBLE_VERSIONS = "v2, v3, v4, v4.5, v5, v5.1, v6, v6.1, v6.2"
 COPYRIGHT = "© 2026 HFPAC Project"
 
 # ---------------------------------------------------------------------------
@@ -326,13 +326,19 @@ class HFPACGUI:
         self.info_frame = tk.LabelFrame(self.root, text="Info")
         self.info_frame.pack(pady=10, fill=tk.X, padx=10)
         
+        # Content frame inside Info Frame to place text and image side-by-side
+        info_content_frame = tk.Frame(self.info_frame)
+        info_content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
         self.info_text = tk.StringVar()
         self.info_text.set("Sample rate: --\nChannels: --\nBit depth: --\nDuration: --")
-        tk.Label(self.info_frame, textvariable=self.info_text, justify=tk.LEFT).pack(anchor="w", padx=5, pady=5)
+        self.info_label = tk.Label(info_content_frame, textvariable=self.info_text, justify=tk.LEFT)
+        self.info_label.pack(side=tk.LEFT, anchor="nw")
 
-        # Controls Frame
-        ctrl_frame = tk.Frame(self.root)
-        ctrl_frame.pack(pady=10)
+        # Album Art Label
+        self.art_label = tk.Label(info_content_frame, width=120, height=120)  # Reserve space
+        self.art_label.pack(side=tk.RIGHT, anchor="ne", padx=(10, 0))
+        self.current_art_image = None # Hold reference to prevent garbage collection
         
         self.btn_play = tk.Button(ctrl_frame, text="Play", width=8, command=self.play_audio, state=tk.DISABLED)
         self.btn_play.pack(side=tk.LEFT, padx=5)
@@ -488,6 +494,8 @@ class HFPACGUI:
                 self.current_track_idx = -1
                 self.stop_audio()
                 self.info_text.set("Track removed from queue.")
+                self.art_label.config(image='')
+                self.current_art_image = None
             elif self.current_track_idx > idx:
                 self.current_track_idx -= 1
             self._update_queue_selection()
@@ -499,6 +507,8 @@ class HFPACGUI:
         self.stop_audio()
         self.file_label.config(text="No file selected")
         self.info_text.set("Sample rate: --\nChannels: --\nBit depth: --\nDuration: --")
+        self.art_label.config(image='')
+        self.current_art_image = None
         
     def _on_queue_double_click(self, event):
         selected = self.playlist_listbox.curselection()
@@ -622,6 +632,23 @@ class HFPACGUI:
             if meta.year: t += f"  ({meta.year})"
             lines.append(f"Track: {t}")
         elif meta.year:       lines.append(f"Year: {meta.year}")
+        if getattr(meta, 'pcm_md5', ""): lines.append(f"PCM MD5: {meta.pcm_md5[:8]}... (Valid)")
+
+        # Load Album Art
+        self.art_label.config(image='')
+        self.current_art_image = None
+        if hasattr(meta, 'cover_art') and meta.cover_art:
+            try:
+                import io
+                from PIL import Image, ImageTk
+                img_data = io.BytesIO(meta.cover_art)
+                pil_img = Image.open(img_data)
+                pil_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
+                self.current_art_image = ImageTk.PhotoImage(pil_img)
+                self.art_label.config(image=self.current_art_image)
+            except Exception as e:
+                log.warning(f"Failed to load embedded cover art: {e}")
+                
         lines += [
             f"Sample rate: {h.sample_rate} Hz",
             f"Channels: {h.channels}",
