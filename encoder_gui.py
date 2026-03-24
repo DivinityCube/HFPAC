@@ -26,7 +26,7 @@ from hfpac_format import (
 )
 from lpc import DEFAULT_LPC_ORDER, FRAME_SIZE
 
-ENCODER_VERSION = "6.1.4.0"
+ENCODER_VERSION = "6.1.5.0"
 
 class EncoderGUI:
     def __init__(self, root: tk.Tk):
@@ -647,8 +647,8 @@ class EncoderGUI:
 
     def _browse_src(self):
         path = filedialog.askopenfilename(
-            title="Select WAV file",
-            filetypes=[("WAV files", "*.wav"), ("All files", "*.*")],
+            title="Select Audio file",
+            filetypes=[("Audio files", "*.wav;*.flac;*.mp3;*.ogg"), ("WAV files", "*.wav"), ("FLAC files", "*.flac"), ("MP3 files", "*.mp3"), ("All files", "*.*")],
         )
         if not path:
             return
@@ -747,7 +747,7 @@ class EncoderGUI:
         src = self._src_var.get().strip()
         out = self._out_var.get().strip()
         if not src:
-            raise ValueError("Please select a source WAV file.")
+            raise ValueError("Please select a source Audio file.")
         if not out:
             raise ValueError("Please specify an output path.")
         if not Path(src).exists():
@@ -882,6 +882,8 @@ class EncoderGUI:
 
     def _encode_worker(self, kwargs):
         import hfpac_format as hfmt
+        import tempfile
+        import os
 
         target_ver     = kwargs.pop("_target_ver", 9)
         adaptive_order = kwargs.pop("adaptive_order", False)
@@ -889,6 +891,33 @@ class EncoderGUI:
         orig_ver       = hfmt.FORMAT_VERSION
 
         def prog_cb(c, t): self.root.after(0, self._update_progress, c, t)
+
+        temp_wav_path = None
+        input_file = kwargs['input_wav']
+        
+        # Convert non-WAV files to WAV using pydub
+        if not input_file.lower().endswith(".wav"):
+            self.root.after(0, lambda: self._status_var.set("Converting audio to WAV..."))
+            try:
+                from pydub import AudioSegment
+            except ImportError:
+                self.root.after(0, self._on_encode_error, Exception("pydub is required to encode non-WAV files. Run 'pip install pydub' and ensure ffmpeg is installed."))
+                return
+            
+            try:
+                # Create a temporary file to hold the converted WAV
+                fd, temp_wav_path = tempfile.mkstemp(suffix=".wav")
+                os.close(fd)
+                
+                audio = AudioSegment.from_file(input_file)
+                audio.export(temp_wav_path, format="wav")
+                kwargs['input_wav'] = temp_wav_path
+                self.root.after(0, lambda: self._status_var.set("Encoding…"))
+            except Exception as e:
+                if temp_wav_path and os.path.exists(temp_wav_path):
+                    os.remove(temp_wav_path)
+                self.root.after(0, self._on_encode_error, Exception(f"Failed to convert audio file: {e}"))
+                return
 
         # v6 (target_ver 8) is the current format — no patching needed.
         # For legacy targets (2–7) we temporarily patch FORMAT_VERSION.
@@ -906,6 +935,12 @@ class EncoderGUI:
             self.root.after(0, self._on_encode_error, e)
         finally:
             hfmt.FORMAT_VERSION = orig_ver
+            # Cleanup temporary file if we created one
+            if temp_wav_path and os.path.exists(temp_wav_path):
+                try:
+                    os.remove(temp_wav_path)
+                except Exception:
+                    pass
 
     def _on_encode_done(self, stats, out_path):
         self._progress.stop()

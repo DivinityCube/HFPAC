@@ -12,7 +12,7 @@ from player import HFPACPlayer
 from hfpac_format import display_version
 
 # Player version — first two numbers track the HFPAC format version
-PLAYER_VERSION = "6.1.4.3"
+PLAYER_VERSION = "6.1.5.0"
 # Versions of the HFPAC format this player can read
 COMPATIBLE_VERSIONS = "v2, v3, v4, v4.5, v5, v5.1, v6, v6.1"
 COPYRIGHT = "© 2026 HFPAC Project"
@@ -390,6 +390,8 @@ class HFPACGUI:
         tk.Button(queue_btn_frame, text="Add...", width=10, command=self.add_to_queue).pack(pady=2)
         tk.Button(queue_btn_frame, text="Remove", width=10, command=self.remove_from_queue).pack(pady=2)
         tk.Button(queue_btn_frame, text="Clear", width=10, command=self.clear_queue).pack(pady=2)
+        tk.Button(queue_btn_frame, text="Move Up", width=10, command=self.move_queue_up).pack(pady=2)
+        tk.Button(queue_btn_frame, text="Move Down", width=10, command=self.move_queue_down).pack(pady=2)
 
         # Log Frame
         self.log_frame = tk.Frame(self.root)
@@ -420,6 +422,60 @@ class HFPACGUI:
             if path.lower().endswith(".hfpac"):
                 self.playlist.append(path)
                 self.playlist_listbox.insert(tk.END, Path(path).name)
+
+    def move_queue_up(self):
+        selected = self.playlist_listbox.curselection()
+        if not selected:
+            return
+            
+        idx = selected[0]
+        if idx == 0:
+            return # Already at top
+            
+        # Swap in internal list
+        self.playlist[idx], self.playlist[idx-1] = self.playlist[idx-1], self.playlist[idx]
+        
+        # Swap in GUI
+        text = self.playlist_listbox.get(idx)
+        self.playlist_listbox.delete(idx)
+        self.playlist_listbox.insert(idx - 1, text)
+        
+        # Adjust current playing index tracker
+        if self.current_track_idx == idx:
+            self.current_track_idx -= 1
+        elif self.current_track_idx == idx - 1:
+            self.current_track_idx += 1
+            
+        # Re-select the moved item and update colours
+        self.playlist_listbox.selection_set(idx - 1)
+        self._update_queue_selection()
+
+    def move_queue_down(self):
+        selected = self.playlist_listbox.curselection()
+        if not selected:
+            return
+            
+        idx = selected[0]
+        if idx == len(self.playlist) - 1:
+            return # Already at bottom
+            
+        # Swap in internal list
+        self.playlist[idx], self.playlist[idx+1] = self.playlist[idx+1], self.playlist[idx]
+        
+        # Swap in GUI
+        text = self.playlist_listbox.get(idx)
+        self.playlist_listbox.delete(idx)
+        self.playlist_listbox.insert(idx + 1, text)
+        
+        # Adjust current playing index tracker
+        if self.current_track_idx == idx:
+            self.current_track_idx += 1
+        elif self.current_track_idx == idx + 1:
+            self.current_track_idx -= 1
+            
+        # Re-select the moved item and update colours
+        self.playlist_listbox.selection_set(idx + 1)
+        self._update_queue_selection()
 
     def remove_from_queue(self):
         selected = self.playlist_listbox.curselection()
