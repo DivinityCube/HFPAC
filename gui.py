@@ -6,13 +6,17 @@ import logging
 import os
 import json
 from pathlib import Path
-from tkinterdnd2 import DND_FILES, TkinterDnD
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    HAS_DND = True
+except ImportError:
+    HAS_DND = False
 
 from player import HFPACPlayer
 from hfpac_format import display_version
 
 # Player version — first two numbers track the HFPAC format version
-PLAYER_VERSION = "6.2.0.1"
+PLAYER_VERSION = "6.2.2.0"
 # Versions of the HFPAC format this player can read
 COMPATIBLE_VERSIONS = "v2, v3, v4, v4.5, v5, v5.1, v6, v6.1, v6.2"
 COPYRIGHT = "© 2026 HFPAC Project"
@@ -83,12 +87,20 @@ class HFPACGUI:
         self.pref_show_metadata = tk.BooleanVar(value=False)
         self.pref_allow_v2 = tk.BooleanVar(value=False)
         self.pref_advanced_logging = tk.BooleanVar(value=False)
+        
+        self.eq_bands = [tk.DoubleVar(value=0.0) for _ in range(10)]
+        self.eq_enabled = tk.BooleanVar(value=False)
+        
         self.load_settings()
 
         self.pref_autoplay.trace_add("write", lambda *args: self.save_settings())
         self.pref_show_metadata.trace_add("write", lambda *args: self.save_settings())
         self.pref_allow_v2.trace_add("write", lambda *args: self.save_settings())
         self.pref_advanced_logging.trace_add("write", lambda *args: self._on_advanced_logging_changed())
+        
+        self.eq_enabled.trace_add("write", lambda *args: self._on_eq_changed())
+        for var in self.eq_bands:
+            var.trace_add("write", lambda *args: self._on_eq_changed())
 
         # Queue System State
         self.playlist = []
@@ -143,6 +155,8 @@ class HFPACGUI:
         settings_menu = tk.Menu(menubar, tearoff=0)
         settings_menu.add_command(label="General", command=self.open_general_settings)
         settings_menu.add_command(label="Advanced", command=self.open_advanced_settings)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="Equalizer (10-Band)", command=self.open_eq_window)
         menubar.add_cascade(label="Settings", menu=settings_menu)
 
         # Help menu
@@ -163,6 +177,12 @@ class HFPACGUI:
                     self.pref_show_metadata.set(settings.get("show_metadata", False))
                     self.pref_allow_v2.set(settings.get("allow_v2", False))
                     self.pref_advanced_logging.set(settings.get("advanced_logging", False))
+                    
+                    self.eq_enabled.set(settings.get("eq_enabled", False))
+                    gains = settings.get("eq_bands", [0.0]*10)
+                    for i, var in enumerate(self.eq_bands):
+                        if i < len(gains):
+                            var.set(gains[i])
             except Exception as e:
                 log.error(f"Failed to load settings: {e}")
 
@@ -171,7 +191,9 @@ class HFPACGUI:
             "autoplay": self.pref_autoplay.get(),
             "show_metadata": self.pref_show_metadata.get(),
             "allow_v2": self.pref_allow_v2.get(),
-            "advanced_logging": self.pref_advanced_logging.get()
+            "advanced_logging": self.pref_advanced_logging.get(),
+            "eq_enabled": self.eq_enabled.get(),
+            "eq_bands": [var.get() for var in self.eq_bands]
         }
         try:
             with open(self.settings_file, "w") as f:
@@ -238,6 +260,74 @@ class HFPACGUI:
             
         tk.Button(settings_win, text="Close", command=on_close, width=10).pack(pady=10)
         settings_win.protocol("WM_DELETE_WINDOW", on_close)
+
+    def _on_eq_changed(self):
+        self.save_settings()
+        if self.player:
+            self.player.eq_enabled = self.eq_enabled.get()
+            self.player.set_eq_gains([var.get() for var in self.eq_bands])
+
+    def open_eq_window(self):
+        # Prevent multiple EQ windows
+        if hasattr(self, "eq_win") and self.eq_win.winfo_exists():
+            self.eq_win.lift()
+            return
+
+        self.eq_win = tk.Toplevel(self.root)
+        self.eq_win.title("10-Band Equalizer")
+        self.eq_win.resizable(False, False)
+        
+        main_frame = tk.Frame(self.eq_win, padx=10, pady=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Toggle checkbox
+        toggle_cb = tk.Checkbutton(main_frame, text="Enable Equalizer", variable=self.eq_enabled, font=("", 10, "bold"))
+        toggle_cb.pack(anchor=tk.W, pady=(0, 10))
+        
+        # EQ sliders frame
+        sliders_frame = tk.Frame(main_frame)
+        sliders_frame.pack(fill=tk.BOTH, expand=True)
+
+        freqs = ["31.5", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
+        
+        for i, (var, freq) in enumerate(zip(self.eq_bands, freqs)):
+            col = tk.Frame(sliders_frame)
+            col.pack(side=tk.LEFT, padx=5)
+            
+            # Value label
+            val_lbl = tk.Label(col, text=f"{var.get():+0.1f} dB", width=6, font=("", 8))
+            val_lbl.pack(side=tk.TOP)
+            
+            # Update label when slider moves
+            def make_updater(lbl):
+                def update(*args):
+                    lbl.config(text=f"{float(args[0]):+0.1f} dB")
+                return update
+            
+            # Slider
+            scale = ttk.Scale(
+                col, from_=12.0, to=-12.0, value=var.get(), variable=var, 
+                orient=tk.VERTICAL, length=150, command=make_updater(val_lbl)
+            )
+            scale.pack(side=tk.TOP, pady=5)
+            
+            # Center Zero Binding
+            def make_z_bind(v):
+                return lambda e: v.set(0.0)
+            scale.bind("<Double-Button-1>", make_z_bind(var))
+            
+            # Freq label
+            tk.Label(col, text=freq, font=("", 8)).pack(side=tk.BOTTOM)
+            
+        btn_frame = tk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(15, 0))
+        
+        def reset_eq():
+            for var in self.eq_bands:
+                var.set(0.0)
+                
+        tk.Button(btn_frame, text="Reset All to Zero", command=reset_eq).pack(side=tk.LEFT)
+        tk.Button(btn_frame, text="Close", command=self.eq_win.destroy, width=10).pack(side=tk.RIGHT)
 
     def _show_about(self):
         """About dialog styled to match the main window."""
@@ -346,14 +436,20 @@ class HFPACGUI:
         ctrl_frame = tk.Frame(self.root)
         ctrl_frame.pack(pady=10)
 
+        self.btn_prev = tk.Button(ctrl_frame, text="Prev", width=8, command=self._play_prev_in_queue, state=tk.DISABLED)
+        self.btn_prev.pack(side=tk.LEFT, padx=5)
+
         self.btn_play = tk.Button(ctrl_frame, text="Play", width=8, command=self.play_audio, state=tk.DISABLED)
         self.btn_play.pack(side=tk.LEFT, padx=5)
-        
+
         self.btn_pause = tk.Button(ctrl_frame, text="Pause", width=8, command=self.toggle_pause, state=tk.DISABLED)
         self.btn_pause.pack(side=tk.LEFT, padx=5)
-        
+
         self.btn_stop = tk.Button(ctrl_frame, text="Stop", width=8, command=self.stop_audio, state=tk.DISABLED)
         self.btn_stop.pack(side=tk.LEFT, padx=5)
+        
+        self.btn_next = tk.Button(ctrl_frame, text="Next", width=8, command=self._play_next_in_queue, state=tk.DISABLED)
+        self.btn_next.pack(side=tk.LEFT, padx=5)
 
         # Progress Frame
         prog_frame = tk.Frame(self.root)
@@ -391,10 +487,11 @@ class HFPACGUI:
         self.playlist_listbox.bind("<Double-Button-1>", self._on_queue_double_click)
 
         # Drag and drop support
-        self.root.drop_target_register(DND_FILES)
-        self.root.dnd_bind('<<Drop>>', self._on_file_drop)
-        self.playlist_listbox.drop_target_register(DND_FILES)
-        self.playlist_listbox.dnd_bind('<<Drop>>', self._on_file_drop)
+        if HAS_DND and hasattr(self.root, 'drop_target_register'):
+            self.root.drop_target_register(DND_FILES)
+            self.root.dnd_bind('<<Drop>>', self._on_file_drop)
+            self.playlist_listbox.drop_target_register(DND_FILES)
+            self.playlist_listbox.dnd_bind('<<Drop>>', self._on_file_drop)
 
         queue_btn_frame = tk.Frame(queue_frame)
         queue_btn_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
@@ -543,10 +640,13 @@ class HFPACGUI:
         self.playlist_listbox.selection_clear(0, tk.END)
         for i in range(self.playlist_listbox.size()):
             self.playlist_listbox.itemconfig(i, {'bg': 'white', 'fg': 'black'})
-        
-        if self.current_track_idx >= 0:
-            self.playlist_listbox.itemconfig(self.current_track_idx, {'bg': '#add8e6', 'fg': 'black'})
-            self.playlist_listbox.see(self.current_track_idx)
+            
+        if len(self.playlist) > 0:
+            self.btn_next.config(state=tk.NORMAL if self.current_track_idx + 1 < len(self.playlist) else tk.DISABLED)
+            self.btn_prev.config(state=tk.NORMAL if self.current_track_idx > 0 or (self.player and self.player._elapsed() > 3.0) else tk.DISABLED)
+        else:
+            self.btn_next.config(state=tk.DISABLED)
+            self.btn_prev.config(state=tk.DISABLED)
 
     def open_file(self):
         log.info("open_file: opening file dialog")
@@ -619,6 +719,11 @@ class HFPACGUI:
     def _on_file_loaded_success(self, player):
         log.info("_on_file_loaded_success: updating UI with loaded player")
         self.player = player
+        
+        # Apply initial EQ settings
+        self.player.eq_enabled = self.eq_enabled.get()
+        self.player.set_eq_gains([var.get() for var in self.eq_bands])
+        
         h = self.player._header
         version_map = {2: "v2", 3: "v3", 4: "v4", 5: "v4.5", 6: "v5", 7: "v5.1", 8: "v6"}
         version_str = version_map.get(
@@ -827,6 +932,12 @@ class HFPACGUI:
             self.time_label.config(
                 text=f"{self.player._fmt_time(elapsed)} / "
                      f"{self.player._fmt_time(duration)}")
+                     
+            if self.current_track_idx == 0:
+                if elapsed > 3.0 and self.btn_prev['state'] == tk.DISABLED:
+                    self.btn_prev.config(state=tk.NORMAL)
+                elif elapsed <= 3.0 and self.btn_prev['state'] == tk.NORMAL:
+                    self.btn_prev.config(state=tk.DISABLED)
 
             # Log state changes only (not every tick)
             cur_paused   = self.player._paused
@@ -891,8 +1002,13 @@ def main():
     sys.excepthook = global_exception_handler
     log.info("main(): global exception hook installed")
 
-    root = TkinterDnD.Tk()
-    log.info("main(): TkinterDnD root created")
+    if HAS_DND:
+        root = TkinterDnD.Tk()
+        log.info("main(): TkinterDnD root created")
+    else:
+        import tkinter as tk
+        root = tk.Tk()
+        log.info("main(): Standard Tk root created (DND not available)")
     app = HFPACGUI(root)
     log.info("main(): entering mainloop")
     root.mainloop()

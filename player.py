@@ -169,6 +169,17 @@ class HFPACPlayer:
         # Lock protecting _current_frame and _paused
         self._lock = threading.Lock()
 
+        # EQ state
+        try:
+            from eq import get_eq_coeffs
+            self.eq_enabled = True
+            self.eq_gains = [0.0] * 10
+            self._eq_coeffs = get_eq_coeffs(self._sample_rate, self.eq_gains)
+            self._eq_state = np.zeros((self._channels, 10, 2), dtype=np.float64)
+            self._eq_lock = threading.Lock()
+        except ImportError:
+            self.eq_enabled = False
+
     # ------------------------------------------------------------------
     # Public
     # ------------------------------------------------------------------
@@ -214,6 +225,13 @@ class HFPACPlayer:
     def toggle_pause(self) -> None:
         with self._lock:
             self._paused = not self._paused
+
+    def set_eq_gains(self, gains) -> None:
+        if self.eq_enabled:
+            with self._eq_lock:
+                self.eq_gains = gains
+                from eq import get_eq_coeffs
+                self._eq_coeffs = get_eq_coeffs(self._sample_rate, self.eq_gains)
 
     def stop(self) -> None:
         self._stopped = True
@@ -298,6 +316,9 @@ class HFPACPlayer:
         with self._lock:
             self._current_frame = target_idx
             self._ch_history    = new_history
+            if getattr(self, 'eq_enabled', False):
+                with self._eq_lock:
+                    self._eq_state.fill(0.0)
 
         # Flush stale audio twice: once before setting the frame pointer
         # (catches blocks already in the queue) and once after (catches any
@@ -444,6 +465,12 @@ class HFPACPlayer:
             pad = getattr(self._header, "trailing_padding", 0)
             if pad > 0 and idx == self._frames_per_ch - 1:
                 interleaved = interleaved[:-pad]
+
+            if getattr(self, 'eq_enabled', False):
+                from eq import process_stereo_eq
+                with self._eq_lock:
+                    if any(g != 0.0 for g in self.eq_gains):
+                        interleaved = process_stereo_eq(interleaved, self._eq_coeffs, self._eq_state)
 
             # Retry placing into queue until it succeeds, stopped, or seeked
             while not self._stopped:

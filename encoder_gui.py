@@ -17,6 +17,12 @@ import time
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    HAS_DND = True
+except ImportError:
+    HAS_DND = False
+
 from codec import encode_wav
 from hfpac_format import (
     ENTROPY_HUFFMAN, ENTROPY_RICE,
@@ -26,7 +32,7 @@ from hfpac_format import (
 )
 from lpc import DEFAULT_LPC_ORDER, FRAME_SIZE
 
-ENCODER_VERSION = "6.2.0.0"
+ENCODER_VERSION = "6.2.2.0"
 
 class EncoderGUI:
     def __init__(self, root: tk.Tk):
@@ -38,6 +44,10 @@ class EncoderGUI:
 
         self._build_menubar()
         self._build_ui()
+
+        if HAS_DND and hasattr(self.root, 'drop_target_register'):
+            self.root.drop_target_register(DND_FILES)
+            self.root.dnd_bind('<<Drop>>', self._on_drop_files)
 
         # Auto-size window after widgets are placed
         self.root.update_idletasks()
@@ -187,7 +197,7 @@ class EncoderGUI:
         pad = dict(padx=10, pady=4)
 
         # ── Source ────────────────────────────────────────────────────
-        src_frame = tk.LabelFrame(self.root, text="Source")
+        src_frame = tk.LabelFrame(self.root, text="Source (Drag & Drop supported)" if HAS_DND else "Source")
         src_frame.pack(fill=tk.X, **pad)
 
         self._src_var = tk.StringVar()
@@ -195,6 +205,10 @@ class EncoderGUI:
                  width=48, state="readonly").pack(side=tk.LEFT, padx=(6, 4), pady=4)
         tk.Button(src_frame, text="Browse…",
                   command=self._browse_src).pack(side=tk.LEFT, padx=(0, 6), pady=4)
+        
+        self._batch_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(src_frame, text="Batch Directory", variable=self._batch_var,
+                       command=self._on_batch_toggle).pack(side=tk.LEFT, padx=(6, 6))
 
         # ── Output ────────────────────────────────────────────────────
         out_frame = tk.LabelFrame(self.root, text="Output")
@@ -653,7 +667,24 @@ class EncoderGUI:
     # File browsing
     # ------------------------------------------------------------------
 
+    def _on_batch_toggle(self):
+        if self._batch_var.get():
+            self._src_var.set("")
+            self._out_var.set("")
+        else:
+            self._src_var.set("")
+            self._out_var.set("")
+
     def _browse_src(self):
+        if getattr(self, '_batch_var', None) and self._batch_var.get():
+            path = filedialog.askdirectory(title="Select Folder containing Audio files")
+            if not path:
+                return
+            self._src_var.set(path)
+            self._out_var.set(path)  # Default output to same directory
+            self._result_text.set(f"Selected batch folder: {path}")
+            return
+
         path = filedialog.askopenfilename(
             title="Select Audio file",
             filetypes=[("Audio files", "*.wav;*.flac;*.mp3;*.ogg"), ("WAV files", "*.wav"), ("FLAC files", "*.flac"), ("MP3 files", "*.mp3"), ("All files", "*.*")],
@@ -664,8 +695,28 @@ class EncoderGUI:
         # Auto-fill output path if it's empty
         if not self._out_var.get():
             self._out_var.set(str(Path(path).with_suffix(".hfpac")))
-            
+
         self._extract_metadata(path)
+
+    def _on_drop_files(self, event):
+        files = self.root.tk.splitlist(event.data)
+        if not files:
+            return
+
+        path = files[0]
+        # Automatically toggle batch mode if a directory is dropped
+        if Path(path).is_dir():
+            self._batch_var.set(True)
+            self._on_batch_toggle() # Refresh UI
+            self._src_var.set(path)
+            self._out_var.set(path)
+            self._result_text.set(f"Selected batch folder: {path}")
+        else:
+            self._batch_var.set(False)
+            self._on_batch_toggle()
+            self._src_var.set(path)
+            self._out_var.set(str(Path(path).with_suffix(".hfpac")))
+            self._extract_metadata(path)
 
     def _extract_metadata(self, path):
         try:
@@ -673,10 +724,10 @@ class EncoderGUI:
                 header = f.read(12)
                 if header[:4] != b'RIFF' or header[8:12] != b'WAVE':
                     return
-                
+
                 # Default empty fields
                 title = artist = album = track = year = ""
-                
+
                 while True:
                     chunk_header = f.read(8)
                     if not chunk_header or len(chunk_header) < 8:
@@ -732,7 +783,12 @@ class EncoderGUI:
             self._art_path_var.set(path)
 
     def _browse_out(self):
-        initial = self._out_var.get() or self._src_var.get()
+        if getattr(self, '_batch_var', None) and self._batch_var.get():
+            path = filedialog.askdirectory(title="Select Output Folder")
+            if path:
+                self._out_var.set(path)
+            return
+
         path = filedialog.asksaveasfilename(
             title="Save HFPAC file as",
             defaultextension=".hfpac",
@@ -907,63 +963,102 @@ class EncoderGUI:
         import hfpac_format as hfmt
         import tempfile
         import os
+        import glob
+        from pathlib import Path
 
         target_ver     = kwargs.pop("_target_ver", 9)
         adaptive_order = kwargs.pop("adaptive_order", False)
         sync_interval  = kwargs.pop("sync_interval", 64)
         orig_ver       = hfmt.FORMAT_VERSION
 
-        def prog_cb(c, t): self.root.after(0, self._update_progress, c, t)
+        input_path = kwargs['input_wav']
+        output_path = kwargs['output_hfpac']
 
-        temp_wav_path = None
-        input_file = kwargs['input_wav']
-        
-        # Convert non-WAV files to WAV using pydub
-        if not input_file.lower().endswith(".wav"):
-            self.root.after(0, lambda: self._status_var.set("Converting audio to WAV..."))
-            try:
-                from pydub import AudioSegment
-            except ImportError:
-                self.root.after(0, self._on_encode_error, Exception("pydub is required to encode non-WAV files. Run 'pip install pydub' and ensure ffmpeg is installed."))
-                return
-            
-            try:
-                # Create a temporary file to hold the converted WAV
-                fd, temp_wav_path = tempfile.mkstemp(suffix=".wav")
-                os.close(fd)
-                
-                audio = AudioSegment.from_file(input_file)
-                audio.export(temp_wav_path, format="wav")
-                kwargs['input_wav'] = temp_wav_path
-                self.root.after(0, lambda: self._status_var.set("Encoding…"))
-            except Exception as e:
-                if temp_wav_path and os.path.exists(temp_wav_path):
-                    os.remove(temp_wav_path)
-                self.root.after(0, self._on_encode_error, Exception(f"Failed to convert audio file: {e}"))
-                return
+        is_batch = getattr(self, '_batch_var', None) and self._batch_var.get() and os.path.isdir(input_path)
 
-        # v6 (target_ver 8) is the current format — no patching needed.
-        # For legacy targets (2–7) we temporarily patch FORMAT_VERSION.
+        if is_batch:
+            files_to_process = []
+            for ext in ("*.wav", "*.flac", "*.mp3", "*.ogg"):
+                files_to_process.extend(glob.glob(os.path.join(input_path, ext)))
+            if not files_to_process:
+                self.root.after(0, self._on_encode_error, Exception(f"No valid audio files found in directory {input_path}"))
+                return
+        else:
+            files_to_process = [input_path]
+
+        total_files = len(files_to_process)
+        agg_stats = {
+            'input_size': 0, 'output_size': 0, 'encode_time': 0, 'duration': 0
+        }
+
         try:
             if target_ver != hfmt.FORMAT_VERSION:
                 hfmt.FORMAT_VERSION = target_ver
-            stats = encode_wav(
-                **kwargs,
-                adaptive_order   = adaptive_order,
-                sync_interval    = sync_interval,
-                progress_callback= prog_cb,
-            )
-            self.root.after(0, self._on_encode_done, stats, kwargs['output_hfpac'])
+
+            for idx, fpath in enumerate(files_to_process):
+                if is_batch:
+                    # In batch mode, update the status with file progress
+                    self.root.after(0, lambda i=idx+1, t=total_files: self._status_var.set(f"Encoding File {i}/{t}..."))
+                    kwargs['input_wav'] = fpath
+                    # Determine output path for this specific file
+                    kwargs['output_hfpac'] = os.path.join(output_path, Path(fpath).with_suffix(".hfpac").name)
+                else:
+                    kwargs['input_wav'] = fpath
+                    kwargs['output_hfpac'] = output_path
+                
+                temp_wav_path = None
+                current_input = kwargs['input_wav']
+
+                # Convert non-WAV files to WAV using pydub
+                if not current_input.lower().endswith(".wav"):
+                    self.root.after(0, lambda st=self._status_var.get(): self._status_var.set(st + " (Converting to WAV...)"))
+                    try:
+                        from pydub import AudioSegment
+                    except ImportError:
+                        raise Exception("pydub is required to encode non-WAV files. Run 'pip install pydub' and ensure ffmpeg is installed.")
+
+                    # Create a temporary file to hold the converted WAV        
+                    fd, temp_wav_path = tempfile.mkstemp(suffix=".wav")        
+                    os.close(fd)
+
+                    audio = AudioSegment.from_file(current_input)
+                    audio.export(temp_wav_path, format="wav")
+                    kwargs['input_wav'] = temp_wav_path
+
+                def prog_cb(c, t): self.root.after(0, self._update_progress, c, t) 
+
+                # Reset start time for correct per-file ETA
+                self.root.after(0, lambda: setattr(self, '_encode_start_time', time.time()))
+
+                try:
+                    stats = encode_wav(
+                        **kwargs,
+                        adaptive_order   = adaptive_order,
+                        sync_interval    = sync_interval,
+                        progress_callback= prog_cb,
+                    )
+                    agg_stats['input_size'] += stats.get('input_size', 0)
+                    agg_stats['output_size'] += stats.get('output_size', 0)
+                    agg_stats['encode_time'] += stats.get('encode_time', 0)
+                    agg_stats['duration'] += stats.get('duration', 0)
+                finally:
+                    if temp_wav_path and os.path.exists(temp_wav_path):
+                        try:
+                            os.remove(temp_wav_path)
+                        except Exception:
+                            pass
+
+            if agg_stats['input_size'] > 0:
+                agg_stats['ratio'] = agg_stats['input_size'] / agg_stats['output_size']
+            else:
+                agg_stats['ratio'] = 0.0
+
+            self.root.after(0, self._on_encode_done, agg_stats, kwargs['output_hfpac'] if not is_batch else output_path)
+
         except Exception as e:
             self.root.after(0, self._on_encode_error, e)
         finally:
             hfmt.FORMAT_VERSION = orig_ver
-            # Cleanup temporary file if we created one
-            if temp_wav_path and os.path.exists(temp_wav_path):
-                try:
-                    os.remove(temp_wav_path)
-                except Exception:
-                    pass
 
     def _on_encode_done(self, stats, out_path):
         self._progress.stop()
@@ -985,7 +1080,7 @@ class EncoderGUI:
             f"Ratio:    {ratio:>11.2f}x\n"
             f"Duration: {dur:>10.1f} s\n"
             f"Time:     {elapsed:>10.2f} s\n"
-            f"Speed:    {dur/elapsed:>10.1f}x realtime"
+            f"Speed:    {dur/elapsed if elapsed > 0 else 0:>10.1f}x realtime"
         )
         self._result_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
         self.root.update_idletasks()
@@ -1003,7 +1098,10 @@ class EncoderGUI:
 # ---------------------------------------------------------------------------
 
 def main():
-    root = tk.Tk()
+    if HAS_DND:
+        root = TkinterDnD.Tk()
+    else:
+        root = tk.Tk()
     EncoderGUI(root)
     root.mainloop()
 
