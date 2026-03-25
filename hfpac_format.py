@@ -599,7 +599,7 @@ def read_header(f: BinaryIO) -> HFPACHeader:
                            entropy_mode=em, lpc_mode=LPC_FLOAT,
                            sync_interval=0, version=5, seek_table=[])
 
-    if version == 9:
+    if version >= 9:
         _, _, sr, ch, bd, lpc, fs, ns, nf, fpb, sm, em, lm, si, delay, pad = struct.unpack(
             _V9_HEADER_FMT, f.read(struct.calcsize(_V9_HEADER_FMT)))
     else:
