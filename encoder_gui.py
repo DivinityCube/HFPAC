@@ -32,7 +32,7 @@ from hfpac_format import (
 )
 from lpc import DEFAULT_LPC_ORDER, FRAME_SIZE
 
-ENCODER_VERSION = "6.2.2.0"
+ENCODER_VERSION = "6.2.3.0"
 
 class EncoderGUI:
     def __init__(self, root: tk.Tk):
@@ -95,7 +95,7 @@ class EncoderGUI:
                      width=20, anchor="w").pack(side=tk.LEFT)
             tk.Label(row, text=value, anchor="w").pack(side=tk.LEFT)
 
-        _row("Output format:", "HFPAC v2, v3, v4, v4.5, v5, v5.1, v6, v6.1")
+        _row("Output format:", "HFPAC v2, v3, v4, v4.5, v5, v5.1, v6, v6.1, v6.2")
 
         ttk.Separator(outer, orient="horizontal").pack(fill=tk.X, pady=(10, 8))
         tk.Label(outer, text="© 2026 HFPAC Project", fg="grey").pack(anchor="w")
@@ -333,17 +333,25 @@ class EncoderGUI:
 
         tk.Label(row_preset, text="Preset", anchor="w", width=14).pack(side=tk.LEFT)
         self._preset_var = tk.StringVar(value="Custom")
+        
+        self.user_presets = self.load_custom_presets()
+        builtin = ["Ultra Fast", "Fast", "Standard", "High", "Ultra", "Custom"]
+        combined_presets = builtin + list(self.user_presets.keys())
+        
         self._preset_cb  = ttk.Combobox(
             row_preset, textvariable=self._preset_var,
-            values=["Ultra Fast", "Fast", "Standard", "High", "Ultra", "Custom"],
+            values=combined_presets,
             state="readonly", width=14
         )
         self._preset_cb.pack(side=tk.LEFT)
         self._preset_cb.bind("<<ComboboxSelected>>", self._apply_preset)
         
+        # Save Preset Button
+        tk.Button(row_preset, text="Save Current", command=self.save_current_preset).pack(side=tk.LEFT, padx=(6, 0))
+        
         _info_btn(row_preset, "Compression Preset",
             "Select a predefined compression preset.\n"
-            "Note: Presets are only available with the latest codec format (v6).\n\n"
+            "Note: Presets are only available with the latest codec format (v6.2).\n\n"
             "• Ultra Fast: Fastest encoding, larger file size.\n"
             "• Fast: Good speed, slightly larger files.\n"
             "• Standard: Balanced speed and compression (Default).\n"
@@ -579,6 +587,38 @@ class EncoderGUI:
             
         self._preset_var.set("Custom")
 
+    def load_custom_presets(self):
+        try:
+            with open("hfpac_presets.json", "r") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def save_current_preset(self):
+        from tkinter.simpledialog import askstring
+        name = askstring("Save Preset", "Enter a name for the new preset:")
+        if not name: return
+        
+        preset_data = {
+            "version": self._version_var.get(),
+            "stereo": self._stereo_var.get(),
+            "lpc_mode": self._lpc_mode_var.get(),
+            "entropy": self._entropy_var.get(),
+            "lpc_order": self._lpc_order_var.get(),
+            "adaptive_lpc": self._adaptive_var.get(),
+            "sync": self._sync_var.get(),
+            "frame_size": self._frame_size_var.get()
+        }
+        
+        self.user_presets[name] = preset_data
+        with open("hfpac_presets.json", "w") as f:
+            json.dump(self.user_presets, f, indent=4)
+            
+        builtin = ["Ultra Fast", "Fast", "Standard", "High", "Ultra", "Custom"]
+        self._preset_cb.config(values=builtin + list(self.user_presets.keys()))
+        self._preset_var.set(name)
+        messagebox.showinfo("Success", f"Preset '{name}' saved successfully.")
+
     def _apply_preset(self, event=None):
         preset = self._preset_var.get()
         if preset == "Custom":
@@ -586,16 +626,17 @@ class EncoderGUI:
             
         self._applying_preset = True
         try:
-            # Lock format to Latest if applying a modern preset
-            self._version_var.set("Latest (v6.2)")
-            self._on_version_change()
-            
-            # Defaults for High/Ultra
-            self._stereo_var.set("Mid-Side")
-            self._lpc_mode_var.set("Integer")
-            self._entropy_var.set("Rice")
-            self._sync_var.set("64")
-            
+            if preset not in self.user_presets:
+                # Lock format to Latest if applying a modern preset
+                self._version_var.set("Latest (v6.2)")
+                self._on_version_change()
+                
+                # Defaults for High/Ultra
+                self._stereo_var.set("Mid-Side")
+                self._lpc_mode_var.set("Integer")
+                self._entropy_var.set("Rice")
+                self._sync_var.set("64")
+
             if preset == "Ultra Fast":
                 self._stereo_var.set("Independent")
                 self._lpc_order_var.set("4")
@@ -613,7 +654,19 @@ class EncoderGUI:
                 self._lpc_order_var.set("24")
                 self._adaptive_var.set(True)
                 self._sync_var.set("128")
-                
+            elif preset in self.user_presets:
+                data = self.user_presets[preset]
+                # Apply custom preset data
+                self._version_var.set(data.get("version", "Latest (v6.2)"))
+                self._on_version_change()
+                self._stereo_var.set(data.get("stereo", "Mid-Side"))
+                self._lpc_mode_var.set(data.get("lpc_mode", "Integer"))
+                self._entropy_var.set(data.get("entropy", "Rice"))
+                self._lpc_order_var.set(data.get("lpc_order", "16"))
+                self._adaptive_var.set(data.get("adaptive_lpc", True))
+                self._sync_var.set(data.get("sync", "64"))
+                self._frame_size_var.set(data.get("frame_size", "4096"))
+
             self._on_adaptive_change()
             # Reset the preset name because _on_adaptive_change/etc might reset it tracking manual changes
             self._preset_var.set(preset)

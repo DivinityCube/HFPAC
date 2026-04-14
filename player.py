@@ -130,6 +130,7 @@ class HFPACPlayer:
         self.path   = path
         self.volume = max(0.0, min(1.0, volume))
         self.gui_mode = gui_mode
+        self.last_audio_block = None
 
         if preloaded_data:
             self._header, self._frames = preloaded_data
@@ -523,10 +524,12 @@ class HFPACPlayer:
         if block_len < frames:
             outdata[:block_len] = np.clip(block * self.volume, -1.0, 1.0)
             outdata[block_len:] = 0.0
+            self.last_audio_block = outdata.copy()
             self._stopped = True
             raise sd.CallbackStop()
         else:
             outdata[:] = np.clip(block * self.volume, -1.0, 1.0)
+            self.last_audio_block = outdata.copy()
 
     # ------------------------------------------------------------------
     # Control loop (main thread — reads keyboard while audio plays)

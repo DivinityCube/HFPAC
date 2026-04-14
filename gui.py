@@ -16,7 +16,7 @@ from player import HFPACPlayer
 from hfpac_format import display_version
 
 # Player version — first two numbers track the HFPAC format version
-PLAYER_VERSION = "6.2.2.0"
+PLAYER_VERSION = "6.2.3.0"
 # Versions of the HFPAC format this player can read
 COMPATIBLE_VERSIONS = "v2, v3, v4, v4.5, v5, v5.1, v6, v6.1, v6.2"
 COPYRIGHT = "© 2026 HFPAC Project"
@@ -431,6 +431,14 @@ class HFPACGUI:
         self.art_label = tk.Label(info_content_frame)  # Will resize when image is loaded
         self.art_label.pack(side=tk.RIGHT, anchor="ne", padx=(10, 0))
         self.current_art_image = None # Hold reference to prevent garbage collection
+
+        # Visualizer Frame
+        vis_frame = tk.Frame(self.root, bg='black', height=60)
+        vis_frame.pack(fill=tk.X, padx=10, pady=5)
+        # Prevent the frame from shrinking
+        vis_frame.pack_propagate(False)
+        self.vis_canvas = tk.Canvas(vis_frame, bg='black', highlightthickness=0, height=60)
+        self.vis_canvas.pack(fill=tk.BOTH, expand=True)
 
         # Controls Frame
         ctrl_frame = tk.Frame(self.root)
@@ -972,6 +980,64 @@ class HFPACGUI:
                     self.btn_stop.config(state=tk.DISABLED)
 
         self.root.after(100, self.update_timer)
+        self.root.after(50, self._update_visualizer)
+
+    def _update_visualizer(self):
+        """Draws a real-time waveform if audio is playing."""
+        if not hasattr(self, 'vis_canvas') or not self.vis_canvas.winfo_exists():
+            return
+            
+        try:
+            import numpy as np
+        except ImportError:
+            self.root.after(50, self._update_visualizer)
+            return
+
+        w = self.vis_canvas.winfo_width()
+        h = self.vis_canvas.winfo_height()
+        if w < 10 or h < 10:
+            self.root.after(50, self._update_visualizer)
+            return
+
+        self.vis_canvas.delete("vis_bar")
+
+        if self.player and not getattr(self.player, '_stopped', True) and not getattr(self.player, '_paused', False):
+            block = getattr(self.player, 'last_audio_block', None)
+            if block is not None and len(block) > 0:
+                ch = block.shape[1] if len(block.shape) > 1 else 1
+                if ch == 2:
+                    mono = (block[:, 0] + block[:, 1]) / 2.0
+                else:
+                    mono = block[:, 0] if len(block.shape) > 1 else block
+                
+                num_bars = 60
+                bar_width = w / num_bars
+                step = max(1, len(mono) // num_bars)
+                
+                for i in range(num_bars):
+                    chunk = mono[i*step : (i+1)*step]
+                    if len(chunk) == 0:
+                        continue
+                    peak = np.max(np.abs(chunk))
+                    
+                    # Smooth visualizer bars out a bit
+                    bar_h = max(2, int(peak * h * 0.9))
+                    x1 = i * bar_width + 1
+                    x2 = x1 + bar_width - 2
+                    y1 = (h - bar_h) / 2
+                    y2 = y1 + bar_h
+                    
+                    # Gradient color depending on height
+                    if peak > 0.8:
+                        color = "#ff3366" # Neon Pink
+                    elif peak > 0.5:
+                        color = "#33ccff" # Neon Blue
+                    else:
+                        color = "#00ffcc" # Neon Cyan
+                        
+                    self.vis_canvas.create_rectangle(x1, y1, x2, y2, fill=color, outline=color, tags="vis_bar")
+        
+        self.root.after(50, self._update_visualizer)
 
 
 def main():
